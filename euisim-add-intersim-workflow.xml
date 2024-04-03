@@ -1,0 +1,654 @@
+<?xml version="1.0" encoding="UTF-8"?><PROCESSDEFINITION AUTHOR="Corey Williams" CLASSIFICATION="SO" COUNTRY_KEY="US" CREATED="28-June-2002" DESCRIPTION="accountAddProcessDesc" DURATION_UNIT="m" LIMIT="43200000" NAME="accountAddProcessName" SCHEMA_VERSION="1.0" STATUS="UNDER_TEST" VALID_FROM="28-JUNE-2002" VALID_TO="28-JUNE-2003" VERSION="2.0" WORKFLOWID="OA">
+    <PARAMETERS>
+        <IN_PARAMETERS ATTRIBUTE_DESCRIPTION="owner" EXTENDED_ATTRIBUTE="owner" PARAM_ID="owner" RELEVANT_DATA_ID="owner" TYPE="Person"/>
+        <IN_PARAMETERS ATTRIBUTE_DESCRIPTION="Service" EXTENDED_ATTRIBUTE="service" PARAM_ID="service" RELEVANT_DATA_ID="service" TYPE="Service"/>
+        <IN_PARAMETERS ATTRIBUTE_DESCRIPTION="Account" EXTENDED_ATTRIBUTE="account" PARAM_ID="account" RELEVANT_DATA_ID="account" TYPE="Account"/>
+    </PARAMETERS>
+    <ACTIVITY ACTIVITYID="START" COMPLETE_ON_TIMEOUT="false" DESCRIPTION="." LIMIT="0" PRIORITY="NORMAL" SKIP_ESCALATION="false">
+        <IMPLEMENTATION_TYPE>
+            <ROUTE/>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="AND"/>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="searchForExisting" COMPLETE_ON_TIMEOUT="false" LIMIT="0" PRIORITY="NORMAL" SKIP_ESCALATION="false">
+        <IMPLEMENTATION_TYPE>
+            <ROUTE/>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="XOR"/>
+        <SCRIPT EVENT="onComplete"><![CDATA[// searchForExisting node in InterSIMAccount add WF
+// MDR 20181031: Initial version
+// Script to find InterSIM Accounts with the same UID as being added in order to prevent duplicate account creation
+accService = service.get();
+acc = account.get();
+uid = acc.getProperty("eruid")[0];
+accSearch = new AccountSearch();
+existingAcc = accSearch.searchByUid(uid, accService.dn);
+
+if (existingAcc!=null) {
+    existingAcc = existingAcc[0];
+    owner = existingAcc.getProperty("owner");
+
+    if (owner.length == 0) {
+        process.auditEvent("Orphan InterSIM account found for: " + uid + ". Will adopt the account instead of creating it.");
+        orphanAcc.set(existingAcc);
+        accFound.set("orphan");
+    } else {
+        activity.setResult("SF", "ERROR: Duplicate InterSIM account found for uid: " + uid + ". Not adding account.");
+        WorkflowRuntimeContext.setProcessResultDetail("ERROR: Duplicate InterSIM account found for uid: " + uid + ".\n Not adding account.");
+        WorkflowRuntimeContext.setProcessResult(WorkflowRuntimeContext.getActivityResult());
+        process.setResult("SF","ERROR: Duplicate InterSIM account found for uid: " + uid + ". Not adding account.");
+        process.setResult(process.FAILED,"ERROR: Duplicate InterSIM account found for uid: " + uid + ". Not adding account.");
+        accFound.set("true");
+    }
+}]]></SCRIPT>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="CREATEACCOUNT" COMPLETE_ON_TIMEOUT="false" LIMIT="600000" PRIORITY="NORMAL" SKIP_ESCALATION="false">
+        <IMPLEMENTATION_TYPE>
+            <APPLICATION CLASS_NAME="com.ibm.itim.workflowextensions.AccountExtensions" METHOD_NAME="createAccount" TOOLNAME="SYSTEM" APPLICATIONID="CREATEACCOUNT"/>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="AND"/>
+        <PARAMETERS>
+            <IN_PARAMETERS EXTENDED_ATTRIBUTE="owner" PARAM_ID="owner" RELEVANT_DATA_ID="owner" TYPE="Person"/>
+            <IN_PARAMETERS EXTENDED_ATTRIBUTE="service" PARAM_ID="service" RELEVANT_DATA_ID="service" TYPE="Service"/>
+            <IN_PARAMETERS EXTENDED_ATTRIBUTE="account" PARAM_ID="account" RELEVANT_DATA_ID="account" TYPE="Account"/>
+        </PARAMETERS>
+        <SCRIPT EVENT="onComplete"><![CDATA[WorkflowRuntimeContext.setProcessResult(WorkflowRuntimeContext.getActivityResult());
+          WorkflowRuntimeContext.setProcessResultDetail(WorkflowRuntimeContext.getActivityResultDetail());]]></SCRIPT>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="AdoptAccount" COMPLETE_ON_TIMEOUT="false" LIMIT="0" NAME="Adopt InterSIM account" PRIORITY="NORMAL" SKIP_ESCALATION="false">
+        <IMPLEMENTATION_TYPE>
+            <APPLICATION CLASS_NAME="SecurIT.WorkflowExtensions" METHOD_NAME="adoptAccount" TOOLNAME="SYSTEM"/>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="AND"/>
+        <PARAMETERS>
+            <IN_PARAMETERS EXTENDED_ATTRIBUTE="orphan" PARAM_ID="orphan" RELEVANT_DATA_ID="orphanAcc" TYPE="Account"/>
+            <IN_PARAMETERS EXTENDED_ATTRIBUTE="owner" PARAM_ID="owner" RELEVANT_DATA_ID="owner" TYPE="Person"/>
+        </PARAMETERS>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="Sleep" COMPLETE_ON_TIMEOUT="false" LIMIT="0" PRIORITY="NORMAL" SKIP_ESCALATION="false">
+        <IMPLEMENTATION_TYPE>
+            <ROUTE/>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="AND"/>
+        <SCRIPT EVENT="onComplete"><![CDATA[var waitTimePerLoop = 500; //miliseconds
+securITExtension.goToSleep(waitTimePerLoop, waitTimePerLoop + 500);]]></SCRIPT>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="EnforcePolicy" COMPLETE_ON_TIMEOUT="false" LIMIT="0" NAME="Enforce Policy" PRIORITY="NORMAL" SKIP_ESCALATION="false">
+        <IMPLEMENTATION_TYPE>
+            <APPLICATION CLASS_NAME="com.ibm.itim.workflowextensions.PersonExtensions" METHOD_NAME="enforcePolicyForPerson" TOOLNAME="SYSTEM"/>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="AND"/>
+        <PARAMETERS>
+            <IN_PARAMETERS EXTENDED_ATTRIBUTE="person" PARAM_ID="person" RELEVANT_DATA_ID="owner" TYPE="Person"/>
+        </PARAMETERS>
+        <SCRIPT EVENT="onComplete"><![CDATA[WorkflowRuntimeContext.setProcessResult(WorkflowRuntimeContext.getActivityResult());
+          WorkflowRuntimeContext.setProcessResultDetail(WorkflowRuntimeContext.getActivityResultDetail());]]></SCRIPT>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="Set_sharedsecret" COMPLETE_ON_TIMEOUT="false" LIMIT="0" PRIORITY="NORMAL" SKIP_ESCALATION="false">
+        <IMPLEMENTATION_TYPE>
+            <ROUTE/>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="AND"/>
+        <SCRIPT EVENT="onComplete"><![CDATA[// Set_sharedsecret script node in InterSIM account Add WF
+//
+// Get the Person owner (it is add so cannot be orphan)
+// Check if this person is a EUStorePerson
+// If so generate and set a new password for pickup
+//
+// Updated 23-01-2009 RFH, pwd pickup did not get registered
+// Using modAcc object now
+//
+// Updated 25-09-2009, suing new IDPickup only the ersharedseret needs to be set on something > 0
+// Updated 14-06-2019 MDR, Moved script to interSIM account add WF because of decomissioning of VTAM
+//
+var person = owner.get();
+if (person != null) {
+    // 09-05-2012 RFH: On request by Monique van Dorst enable for all Persons
+    // if(person.getBLavaObject().getProfileName().toLowerCase()=="eustoreperson")
+    // {
+    // var dn = modAcc.get().getProperty("erparent")[0];
+    // process.auditEvent("EUStorePerson detected");
+    securITExtension.setPersonAttribute(person.dn + "", "ersharedsecret", "1000", "true");
+    //}
+}
+//END]]></SCRIPT>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="checkForEUStoreGallPersonowner" COMPLETE_ON_TIMEOUT="false" DESCRIPTION=".." LIMIT="0" PRIORITY="NORMAL" SKIP_ESCALATION="false">
+        <IMPLEMENTATION_TYPE>
+            <ROUTE/>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="XOR"/>
+        <SCRIPT EVENT="onComplete"><![CDATA[// checkForEUStoreGallPersonowner script node in InterSIM account add WF
+//
+// Check if there is a Person owner, it's not a orphan
+// Check if this person is a EUStorePerson and Gall
+// 2.2 10-03-2014 RFH Initial
+// 2.3 17-06-2019 MDR Moved to InterSIM add WF and added uid check
+var person = owner.get();
+if (person != null) {
+   if (person.getProperty("uid")[0] != null && person.getProperty("uid")[0] != "") {
+      if (securITExtension.getJavaObject(person.getKey()).getProfileName().toLowerCase() == "eustoreperson") {
+         var ou = person.getProperty("ou");
+         if (ou != null) {
+            if (ou.length > 0) {
+               var ouVal = ou[0];
+               if (ouVal.toLowerCase().indexOf("5b_") != -1 || ouVal.toLowerCase().indexOf("testaccounts") != -1) {
+                  // Disabled until Gall in production
+                  sendMail.set("true");
+             
+               }
+            }
+         }
+      }
+   }
+}
+//END]]></SCRIPT>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="ForGallStorePersonsSendIDPickupNotification" COMPLETE_ON_TIMEOUT="false" DESCRIPTION="work order" LIMIT="3600000" NAME="IDPickup Notification" PRIORITY="NORMAL" PROCESS="SYNC" SKIP_ESCALATION="false" TYPE="WORKORDER">
+        <IMPLEMENTATION_TYPE>
+            <MANUAL CUE_TEXT="$workOrderKey" DEFERRAL_LIMIT="90">
+                <NOTIFICATION GRP_EMAIL="false" GRP_EMAIL_TOPIC="ForGallStorePersonsSendIDPickupNotification" USE_DEFAULT_TEMPLATE="false">
+                    <SUBJECT><![CDATA[Nieuwe medewerker notificatie: <JS>owner.get().getProperty("cn")[0];</JS> (<JS>return owner.get().getProperty("ou")[0];</JS>)]]></SUBJECT>
+                    <MESSAGE MIME_TYPE="text/plain"><![CDATA[Beste Manager,
+
+Voor winkel <JS>return owner.get().getProperty("ou")[0];</JS> is een nieuwe medewerker opgevoerd: <JS>return owner.get().getProperty("cn")[0];</JS>.
+Voor deze medewerker is de gebruikersnaam <JS>return owner.get().getProperty("uid")[0];</JS> aangemaakt.
+Met de volgende gegevens kan deze medewerker de PNL pickup procedure doorlopen:
+
+Achternaam: <JS>return owner.get().getProperty("sn")[0];</JS>
+Geboortedatum: <JS>var dateString = owner.get().getProperty("birthdate")[0]; return dateString.substring(6,8) + "-" + dateString.substring(4,6) + "-" + dateString.substring(0,4)</JS>
+Pincode: <JS>return owner.get().getProperty("hrsharedsecret")[0];</JS>
+
+Hierbij het verzoek om deze gegevens aan de medewerker te overhandigen.
+
+
+Met vriendelijke groet,
+Namens het Contact Center]]></MESSAGE>
+                    <MESSAGE MIME_TYPE="text/html"/>
+                </NOTIFICATION>
+                <WORKORDER SUBTYPE="0" WAIT_FOR_COMPLETION="false"/>
+            </MANUAL>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="AND"/>
+        <PARTICIPANT PARTICIPANTID="ID7296310775183206843" TYPE="CM">
+            <SCRIPT><![CDATA[// custom participant script in ForGallStorePersonsSendIDPickupNotification in InterSIM account ADD workflow
+// 10-03-2014 RFH Inital - Copy of TAM restore
+// 17-06-2019 MDR - Moved to InterSIM Add WF
+var person = owner.get();
+var AuthOwners = new ArrayList();
+var container = person.getProperty('erparent')[0] + "";
+var erglobalid = person.getProperty('erglobalid')[0] + "";
+
+// Get the position codes used to indicate a Supermarktmanager
+var smCodesList = securITExtension.getTIMProperty("rbam", "position.notification.supermarktmanager.codes");
+var smCodes = new Array();
+var codeFound = false;
+if (smCodesList != null) {
+   if (smCodesList.length > 0) {
+      if (smCodesList.indexOf(",") != -1) {
+         smCodes = smCodesList.split(",");
+      } else {
+         smCodes[0] = smCodesList;
+      }
+      codeFound = true;
+   }
+}
+
+// Get the position codes used to indicate a Assistent Supermarktmanager
+var asmCodesList = securITExtension.getTIMProperty("rbam", "position.notification.assistentsupermarktmanager.codes");
+var asmCodes = new Array();
+if (asmCodesList != null) {
+   if (asmCodesList.length > 0) {
+      if (asmCodesList.indexOf(",") != -1) {
+         asmCodes = asmCodesList.split(",");
+      } else {
+         asmCodes[0] = asmCodesList;
+      }
+      codeFound = true;
+   }
+}
+
+// The attribute to find the position codes on
+var positionCodeAttr = securITExtension.getTIMProperty("rbam", "person.positioncode.attribute");
+
+var filter = "(&(erparent=" + container + ")(erpersonstatus=0)(!(erglobalid=" + erglobalid + "))";
+if (!codeFound) {
+   filter += "(hrpositions=*Mgr*)"
+} else {
+
+   // Backwards filter
+   filter += "(|(hrpositions=*Mgr*)"
+
+   // Add thye SM codes
+   for (var x = 0; x < smCodes.length; x++) {
+      filter += "(" + positionCodeAttr + "=" + smCodes[x] + ")";
+   }
+
+   // Add the ASM codes
+   for (var x = 0; x < asmCodes.length; x++) {
+      filter += "(" + positionCodeAttr + "=" + asmCodes[x] + ")";
+   }
+
+   // Close the | part of the filter
+   filter += ")";
+}
+filter += ")";
+
+// Search for all Persons with hrpositions (Assistant)Supermarktmanager
+// Located in the same OU (parent)
+// But not the Person self (if this IS the Supermarktmanager)
+//var personSearch = new PersonSearch(); DOES NOT WORK
+//var managerArray = personSearch.searchByFilter("EUStorePerson",filter, 2);
+//process.auditEvent("Filter:" + filter);
+var managerArray = securITExtension.searchTIMLDAP("", filter, "dn", "");
+if (managerArray != null) {
+   if (managerArray.length > 0) {
+      for (var i = 0; i < managerArray.length; i++) {
+         var manager = managerArray[i];
+         var auth_owner = new Participant(ParticipantType.USER, "" + manager);
+         AuthOwners.add(securITExtension.getJavaObject(auth_owner.getKey()));
+         var mgr = new Person(manager);
+         process.auditEvent("Sending mail to:" + mgr.getProperty("cn")[0]);
+      }
+   }
+}
+// If no Manager found: fall back to the Security Office
+if (managerArray.length < 1) {
+   // no authorization owners defined - go one level up if not at root
+   var soRole = securITExtension.getProperty("applicationextension", "workflow.runtime.soroledn");
+   if (soRole != null && soRole.length > 0) {
+      var securityOffice = new Participant(ParticipantType.ROLE, soRole);
+      AuthOwners.add(securITExtension.getJavaObject(securityOffice.getKey()));
+      process.auditEvent("Sending Gall IDPickup mail to Security Office");
+   }
+}
+
+return AuthOwners;
+//END]]></SCRIPT>
+        </PARTICIPANT>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="SendUidViaEmail" COMPLETE_ON_TIMEOUT="false" DESCRIPTION="work order" LIMIT="0" NAME="SendUidViaEmail" PRIORITY="NORMAL" PROCESS="SYNC" SKIP_ESCALATION="false" TYPE="WORKORDER">
+        <IMPLEMENTATION_TYPE>
+            <MANUAL CUE_TEXT="" DEFERRAL_LIMIT="90">
+                <NOTIFICATION GRP_EMAIL="false" GRP_EMAIL_TOPIC="SendUidViaEmail" USE_DEFAULT_TEMPLATE="false">
+                    <SUBJECT><![CDATA[[NIEUWE MEDEWERKER] Accountgegevens voor <JS>owner.get().getProperty("cn")[0];</JS>]]></SUBJECT>
+                    <MESSAGE MIME_TYPE="text/plain"><![CDATA[Beste Manager,
+
+Er is een account aangemaakt voor de nieuwe medewerker:
+• Naam: <JS>owner.get().getProperty("cn")[0];</JS>
+• Kostenplaats: <JS>owner.get().getProperty("ou")[0];</JS>
+• Glemp ID:  <JS>owner.get().getProperty("globalid")[0];</JS>
+• PNL nummer: <JS>owner.get().getProperty("uid")[0];</JS>
+• E-mail adres: <JS>owner.get().getProperty("brand_mail")[0];</JS>
+
+Als manager ontvangt u een aparte e-mail met het wachtwoord van de nieuwe medewerker.
+
+Met vriendelijke groet,
+Identity and Access Management-team
+
+PS: Dit is een automatisch gegenereerde e-mail. Gelieve niet op deze e-mail te antwoorden.]]></MESSAGE>
+                    <MESSAGE MIME_TYPE="text/html"/>
+                </NOTIFICATION>
+                <WORKORDER SUBTYPE="1" WAIT_FOR_COMPLETION="false"/>
+            </MANUAL>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="AND"/>
+        <PARTICIPANT PARTICIPANTID="ID7058995416470130939" TYPE="CM">
+            <SCRIPT><![CDATA[// custom participant script in ForGallStorePersonsSendIDPickupNotification in InterSIM account ADD workflow
+// Migrated ASIS by IGA project
+// 10-03-2014 RFH Inital - Copy of TAM restore
+// 17-06-2019 MDR - Moved to InterSIM Add WF
+// Migrated from the workorder block in the email block 
+var person = owner.get();
+var AuthOwners = new ArrayList();
+var container = person.getProperty('erparent')[0];
+var erglobalid = person.getProperty('erglobalid')[0] + "";
+var ou = person.getProperty('ou')[0];
+
+// Get the position codes used to indicate a Supermarktmanager
+var smCodesList = securITExtension.getTIMProperty("rbam", "position.notification.supermarktmanager.codes");
+var smCodes = new Array();
+var codeFound = false;
+if (smCodesList != null) {
+   if (smCodesList.length > 0) {
+      if (smCodesList.indexOf(",") != -1) {
+         smCodes = smCodesList.split(",");
+      } else {
+         smCodes[0] = smCodesList;
+      }
+      codeFound = true;
+   }
+}
+
+// Get the position codes used to indicate a Assistent Supermarktmanager
+var asmCodesList = securITExtension.getTIMProperty("rbam", "position.notification.assistentsupermarktmanager.codes");
+var asmCodes = new Array();
+if (asmCodesList != null) {
+   if (asmCodesList.length > 0) {
+      if (asmCodesList.indexOf(",") != -1) {
+         asmCodes = asmCodesList.split(",");
+      } else {
+         asmCodes[0] = asmCodesList;
+      }
+      codeFound = true;
+   }
+}
+
+// The attribute to find the position codes on
+var positionCodeAttr = securITExtension.getTIMProperty("rbam", "person.positioncode.attribute");
+
+//var filter = "(&(erparent=" + container + ")(erpersonstatus=0)(!(erglobalid=" + erglobalid + "))";
+//var filter = "(&(hrstores=" + ou + ")(erpersonstatus=0)(!(erglobalid=" + erglobalid + "))";
+var filter = "(&(|(hrstores=" + ou + ")(erparent=" + container + "))(erpersonstatus=0)(!(erglobalid=" + erglobalid + "))";
+
+//hrstores = [1, 2, 3]]]><![CDATA[
+//erparent = 1
+
+if (!codeFound) {
+   filter += "(hrpositions=*Mgr*)"
+} else {
+
+   // Backwards filter
+   filter += "(|(hrpositions=*Mgr*)"
+
+   // Add thye SM codes
+   for (var x = 0; x < smCodes.length; x++) {
+      filter += "(" + positionCodeAttr + "=" + smCodes[x] + ")";
+   }
+
+   // Add the ASM codes
+   for (var x = 0; x < asmCodes.length; x++) {
+      filter += "(" + positionCodeAttr + "=" + asmCodes[x] + ")";
+   }
+
+   // Close the | part of the filter
+   filter += ")";
+}
+filter += ")";
+process.auditEvent("Filter: " + filter);
+
+// Search for all Persons with hrpositions (Assistant)Supermarktmanager
+// Located in the same OU (parent)
+// But not the Person self (if this IS the Supermarktmanager)
+//var personSearch = new PersonSearch(); DOES NOT WORK
+//var managerArray = personSearch.searchByFilter("EUStorePerson",filter, 2);
+
+var managerArray = securITExtension.searchTIMLDAP("", filter, "dn", "");
+if (managerArray != null) {
+   if (managerArray.length > 0) {
+      for (var i = 0; i < managerArray.length; i++) {
+         var manager = managerArray[i];
+         var auth_owner = new Participant(ParticipantType.USER, "" + manager);
+         AuthOwners.add(securITExtension.getJavaObject(auth_owner.getKey()));
+         var mgr = new Person(manager);
+         process.auditEvent("Sending mail to:" + mgr.getProperty("cn")[0]);
+      }
+   }
+}
+// If no Manager found: fall back to the Security Office
+if (managerArray.length < 1) {
+   // no authorization owners defined - go one level up if not at root
+   var soRole = securITExtension.getProperty("applicationextension", "workflow.runtime.soroledn");
+   if (soRole != null && soRole.length > 0) {
+      var securityOffice = new Participant(ParticipantType.ROLE, soRole);
+      AuthOwners.add(securITExtension.getJavaObject(securityOffice.getKey()));
+      process.auditEvent("Sending Gall OnBoarding mail to Security Office");
+   }
+}
+
+return AuthOwners;
+//END]]></SCRIPT>
+        </PARTICIPANT>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="SendPswViaEmail" COMPLETE_ON_TIMEOUT="false" DESCRIPTION="work order" LIMIT="0" NAME="SendPswViaEmail" PRIORITY="NORMAL" PROCESS="SYNC" SKIP_ESCALATION="false" TYPE="WORKORDER">
+        <IMPLEMENTATION_TYPE>
+            <MANUAL CUE_TEXT="" DEFERRAL_LIMIT="90">
+                <NOTIFICATION GRP_EMAIL="false" GRP_EMAIL_TOPIC="SendPswViaEmail" USE_DEFAULT_TEMPLATE="false">
+                    <SUBJECT><![CDATA[[NIEUWE MEDEWERKER] Wachtwoordgegevens voor <JS>owner.get().getProperty("cn")[0];</JS>]]></SUBJECT>
+                    <MESSAGE MIME_TYPE="text/plain"><![CDATA[Beste Manager,
+ 
+Er is een account aangemaakt voor: <JS>owner.get().getProperty("cn")[0];</JS>. U ontvangt een aparte e-mail met de inloggegevens van de medewerker.
+ 
+Het wachtwoord om in te loggen en toegang te krijgen tot applicaties is: "Pass" + laatste 4 cijfers van het Glemp ID. Bijvoorbeeld: als het Glemp ID "1234567890" is, is het wachtwoord "Pass7890". Het Glemp ID van de nieuwe medewerker is verstuurd in een aparte email. De medewerker dient het wachtwoord zelf te wijzigen op de eerste werkdag. Dat werkt als volgt:
+
+Het is noodzakelijk dat de medewerker de eerste keer inlogt met het bovenstaande wachtwoord op het Sam intranet: https://sam.ahold.com/az_hksam_jct/home.htm
+De medewerker moet bij de eerste keer aanmelden meteen een nieuw wachtwoord instellen. Na een paar minuten wachten, kan de medewerker inloggen op de kassa en overige systemen met het nieuwe wachtwoord.
+ 
+Met vriendelijke groet,
+Identity and Access Management-team
+ 
+PS: Dit is een automatisch gegenereerde e-mail. Gelieve niet op deze e-mail te antwoorden.]]></MESSAGE>
+                    <MESSAGE MIME_TYPE="text/html"/>
+                </NOTIFICATION>
+                <WORKORDER SUBTYPE="1" WAIT_FOR_COMPLETION="false"/>
+            </MANUAL>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="AND" SPLIT="AND"/>
+        <PARTICIPANT PARTICIPANTID="ID7058995415229640121" TYPE="CM">
+            <SCRIPT><![CDATA[// custom participant script in ForGallStorePersonsSendIDPickupNotification in InterSIM account ADD workflow
+// Migrated ASIS by IGA project
+// 10-03-2014 RFH Inital - Copy of TAM restore
+// 17-06-2019 MDR - Moved to InterSIM Add WF
+// Migrated from the workorder block in the email block 
+var person = owner.get();
+var AuthOwners = new ArrayList();
+var container = person.getProperty('erparent')[0];
+var erglobalid = person.getProperty('erglobalid')[0] + "";
+var ou = person.getProperty('ou')[0];
+
+// Get the position codes used to indicate a Supermarktmanager
+var smCodesList = securITExtension.getTIMProperty("rbam", "position.notification.supermarktmanager.codes");
+var smCodes = new Array();
+var codeFound = false;
+if (smCodesList != null) {
+   if (smCodesList.length > 0) {
+      if (smCodesList.indexOf(",") != -1) {
+         smCodes = smCodesList.split(",");
+      } else {
+         smCodes[0] = smCodesList;
+      }
+      codeFound = true;
+   }
+}
+
+// Get the position codes used to indicate a Assistent Supermarktmanager
+var asmCodesList = securITExtension.getTIMProperty("rbam", "position.notification.assistentsupermarktmanager.codes");
+var asmCodes = new Array();
+if (asmCodesList != null) {
+   if (asmCodesList.length > 0) {
+      if (asmCodesList.indexOf(",") != -1) {
+         asmCodes = asmCodesList.split(",");
+      } else {
+         asmCodes[0] = asmCodesList;
+      }
+      codeFound = true;
+   }
+}
+
+// The attribute to find the position codes on
+var positionCodeAttr = securITExtension.getTIMProperty("rbam", "person.positioncode.attribute");
+
+//var filter = "(&(erparent=" + container + ")(erpersonstatus=0)(!(erglobalid=" + erglobalid + "))";
+//var filter = "(&(hrstores=" + ou + ")(erpersonstatus=0)(!(erglobalid=" + erglobalid + "))";
+var filter = "(&(|(hrstores=" + ou + ")(erparent=" + container + "))(erpersonstatus=0)(!(erglobalid=" + erglobalid + "))";
+
+//hrstores = [1, 2, 3]]]><![CDATA[
+//erparent = 1
+
+if (!codeFound) {
+   filter += "(hrpositions=*Mgr*)"
+} else {
+
+   // Backwards filter
+   filter += "(|(hrpositions=*Mgr*)"
+
+   // Add thye SM codes
+   for (var x = 0; x < smCodes.length; x++) {
+      filter += "(" + positionCodeAttr + "=" + smCodes[x] + ")";
+   }
+
+   // Add the ASM codes
+   for (var x = 0; x < asmCodes.length; x++) {
+      filter += "(" + positionCodeAttr + "=" + asmCodes[x] + ")";
+   }
+
+   // Close the | part of the filter
+   filter += ")";
+}
+filter += ")";
+process.auditEvent("Filter: " + filter);
+
+// Search for all Persons with hrpositions (Assistant)Supermarktmanager
+// Located in the same OU (parent)
+// But not the Person self (if this IS the Supermarktmanager)
+//var personSearch = new PersonSearch(); DOES NOT WORK
+//var managerArray = personSearch.searchByFilter("EUStorePerson",filter, 2);
+
+var managerArray = securITExtension.searchTIMLDAP("", filter, "dn", "");
+if (managerArray != null) {
+   if (managerArray.length > 0) {
+      for (var i = 0; i < managerArray.length; i++) {
+         var manager = managerArray[i];
+         var auth_owner = new Participant(ParticipantType.USER, "" + manager);
+         AuthOwners.add(securITExtension.getJavaObject(auth_owner.getKey()));
+         var mgr = new Person(manager);
+         process.auditEvent("Sending mail to:" + mgr.getProperty("cn")[0]);
+      }
+   }
+}
+// If no Manager found: fall back to the Security Office
+if (managerArray.length < 1) {
+   // no authorization owners defined - go one level up if not at root
+   var soRole = securITExtension.getProperty("applicationextension", "workflow.runtime.soroledn");
+   if (soRole != null && soRole.length > 0) {
+      var securityOffice = new Participant(ParticipantType.ROLE, soRole);
+      AuthOwners.add(securITExtension.getJavaObject(securityOffice.getKey()));
+      process.auditEvent("Sending Gall OnBoarding mail to Security Office");
+   }
+}
+
+return AuthOwners;
+//END]]></SCRIPT>
+        </PARTICIPANT>
+    </ACTIVITY>
+    <ACTIVITY ACTIVITYID="END" COMPLETE_ON_TIMEOUT="false" LIMIT="0" PRIORITY="NORMAL" SKIP_ESCALATION="false">
+        <IMPLEMENTATION_TYPE>
+            <ROUTE/>
+        </IMPLEMENTATION_TYPE>
+        <TRANSITION_RESTRICTION JOIN="XOR" SPLIT="AND"/>
+        <SCRIPT EVENT="onComplete"><![CDATA[
+          WorkflowRuntimeContext.completeRequest();
+    ]]></SCRIPT>
+    </ACTIVITY>
+    <TRANSITION TRANSITIONID="id5378343716379168050">
+        <TRANSITION_KIND>
+            <REGULAR FROM="searchForExisting" TO="CREATEACCOUNT">
+                <SCRIPT><![CDATA[accFound.get()=="false";]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id5378731877928053260">
+        <TRANSITION_KIND>
+            <REGULAR FROM="searchForExisting" TO="AdoptAccount">
+                <SCRIPT><![CDATA[accFound.get()=="orphan"]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id5666202930418889689">
+        <TRANSITION_KIND>
+            <REGULAR FROM="AdoptAccount" TO="Sleep">
+                <SCRIPT><![CDATA[true]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id5666209505363140148">
+        <TRANSITION_KIND>
+            <REGULAR FROM="Sleep" TO="EnforcePolicy">
+                <SCRIPT><![CDATA[true]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id7232144824085096121">
+        <TRANSITION_KIND>
+            <REGULAR FROM="START" TO="searchForExisting">
+                <SCRIPT><![CDATA[true]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id7293778676871433426">
+        <TRANSITION_KIND>
+            <REGULAR FROM="Set_sharedsecret" TO="checkForEUStoreGallPersonowner">
+                <SCRIPT><![CDATA[true]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id7293822778433181226">
+        <TRANSITION_KIND>
+            <REGULAR FROM="checkForEUStoreGallPersonowner" TO="END">
+                <SCRIPT><![CDATA[sendMail.get()!="true";]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id7293803240598703667">
+        <TRANSITION_KIND>
+            <REGULAR FROM="checkForEUStoreGallPersonowner" TO="ForGallStorePersonsSendIDPickupNotification">
+                <SCRIPT><![CDATA[//sendMail.get()=="true";
+false]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id7293815514817896093">
+        <TRANSITION_KIND>
+            <REGULAR FROM="ForGallStorePersonsSendIDPickupNotification" TO="END">
+                <SCRIPT><![CDATA[true]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id7410363628395477363">
+        <TRANSITION_KIND>
+            <REGULAR FROM="searchForExisting" TO="Set_sharedsecret">
+                <SCRIPT><![CDATA[accFound.get()=="true"]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id7410380540995741820">
+        <TRANSITION_KIND>
+            <REGULAR FROM="EnforcePolicy" TO="Set_sharedsecret">
+                <SCRIPT><![CDATA[true]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="id7410392422030465833">
+        <TRANSITION_KIND>
+            <REGULAR FROM="CREATEACCOUNT" TO="Set_sharedsecret"/>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="tsi7ohcaory">
+        <TRANSITION_KIND>
+            <REGULAR FROM="checkForEUStoreGallPersonowner" TO="SendUidViaEmail">
+                <SCRIPT><![CDATA[sendMail.get()=="true";
+//false]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="t8xiuow062k">
+        <TRANSITION_KIND>
+            <REGULAR FROM="SendUidViaEmail" TO="SendPswViaEmail">
+                <SCRIPT><![CDATA[true]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <TRANSITION TRANSITIONID="t1vrrggdbjb">
+        <TRANSITION_KIND>
+            <REGULAR FROM="SendPswViaEmail" TO="END">
+                <SCRIPT><![CDATA[true]]></SCRIPT>
+            </REGULAR>
+        </TRANSITION_KIND>
+    </TRANSITION>
+    <RELEVANT_DATA CONTEXT="Requestee" DESCRIPTION="owner" NAME="owner" RELEVANT_DATA_ID="owner" TYPE="Person"/>
+    <RELEVANT_DATA DESCRIPTION="Service" NAME="service" RELEVANT_DATA_ID="service" TYPE="Service"/>
+    <RELEVANT_DATA CONTEXT="Subject" DESCRIPTION="Account" NAME="account" RELEVANT_DATA_ID="account" TYPE="Account"/>
+    <RELEVANT_DATA RELEVANT_DATA_ID="accFound" TYPE="String" VALUE="false"/>
+    <RELEVANT_DATA RELEVANT_DATA_ID="orphanAcc" TYPE="Account" ENTITY="interSIMAccount"/>
+    <RELEVANT_DATA RELEVANT_DATA_ID="sendMail" TYPE="String" VALUE="false"/>
+</PROCESSDEFINITION>
